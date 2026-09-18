@@ -40,7 +40,7 @@ spec:
     spec:
       containers:
         - name: hello-app
-          image: ghcr.io/jenbops/k8s-cicd-lab-app:latest
+          image: ghcr.io/jenbops/k8s-cicd-lab-app:ed29db7
           ports:
             - containerPort: 5000
           resources:
