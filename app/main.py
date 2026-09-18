@@ -23,7 +23,7 @@ APP_VERSION = os.environ.get("APP_VERSION", "dev")
 
 @app.get("/")
 def root():
-    return jsonify(message="hello from the k8s CI/CD lab", version=APP_VERSION)
+    return jsonify(message="hello from my k8s cluster, jen!", version=APP_VERSION)
 
 
 @app.get("/version")
