@@ -1,0 +1,199 @@
+---
+# playbook.yml
+#
+# WHAT THIS FILE DOES:
+# Configures the EC2 instance Terraform already created: installs k3s
+# (a lightweight, CNCF-certified Kubernetes distribution — real
+# Kubernetes API, single ~70MB binary, none of the multi-component
+# kubeadm setup complexity), waits for it to come up, pulls the
+# generated kubeconfig back to your Mac, then installs ArgoCD into the
+# cluster via its official manifests.
+#
+# WHY THIS MATTERS FOR LEARNING:
+# Every task below is written to be IDEMPOTENT — running this playbook
+# five times in a row should produce the exact same end state as running
+# it once, with tasks 2-5 reporting "ok" (unchanged) instead of
+# "changed". This is the core Ansible mental model, different from a
+# plain bash script: a bash script just executes commands top to bottom
+# every time; Ansible modules first check current state and only act if
+# there's a gap to close. Compare `command: apt install nginx` (runs
+# every time, errors if already installed in some configs) against
+# `apt: name=nginx state=present` (checks first, no-ops if satisfied).
+#
+# WHY K3S INSTEAD OF KUBEADM:
+# kubeadm gives you a "real" multi-component control plane (separate
+# API server, scheduler, controller-manager, etcd processes) — valuable
+# to understand, but heavy for a 2GB-RAM box. k3s bundles all of that
+# into one lightweight binary (using SQLite instead of etcd by default)
+# while remaining a fully conformant, CNCF-certified Kubernetes
+# distribution — `kubectl get pods` and every manifest you write behaves
+# identically to a "big" cluster. It's what you'd reach for on real edge
+# or resource-constrained deployments, not just a learning shortcut.
+
+- name: Configure k3s cluster node and install ArgoCD
+  hosts: k3s_node
+  become: true # run as root — installing k3s and system packages requires it
+  gather_facts: true
+
+  vars:
+    kubeconfig_local_path: "{{ playbook_dir }}/../kubeconfig.yaml"
+    argocd_namespace: argocd
+    argocd_manifest_url: "https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml"
+
+  tasks:
+    # -----------------------------------------------------------------
+    # Task 1: baseline package updates. Uses the `apt` module, not
+    # `command: apt-get update` — the module is idempotent, understands
+    # apt's exit codes properly, and is safe to re-run.
+    # -----------------------------------------------------------------
+    - name: Update apt package cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600 # skip re-running if cache is <1hr old
+
+    - name: Install baseline packages (curl needed for the k3s installer)
+      ansible.builtin.apt:
+        name:
+          - curl
+          - ca-certificates
+        state: present
+
+    # -----------------------------------------------------------------
+    # Task 2: install k3s. There's no native Ansible module for k3s
+    # (it's a niche-enough tool that the community hasn't shipped one
+    # into ansible.builtin), so we fall back to running its official
+    # install script. This is a deliberate, honest example of a real
+    # limitation you'll hit with Ansible: sometimes you need a `shell`/
+    # `command` task and have to build idempotency yourself with a
+    # `creates:` guard, rather than getting it for free from a module.
+    # -----------------------------------------------------------------
+    - name: Check whether k3s is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+
+    - name: Download and run the official k3s install script
+      ansible.builtin.shell: |
+        set -e
+        curl -sfL https://get.k3s.io | sh -
+      args:
+        creates: /usr/local/bin/k3s # this IS the idempotency guard —
+        # Ansible skips this task entirely on the 2nd+ run if this path
+        # already exists, exactly like the `apt` module skips installing
+        # an already-installed package.
+      when: not k3s_binary.stat.exists
+
+    - name: Ensure /etc/rancher/k3s config directory exists
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: "0755"
+
+    - name: Ensure k3s config includes the public IP as a TLS SAN
+      ansible.builtin.copy:
+        dest: /etc/rancher/k3s/config.yaml
+        content: |
+          tls-san:
+            - "{{ ansible_host }}"
+        mode: "0644"
+      notify: Restart k3s
+
+    - name: Apply the k3s restart now, if the TLS SAN config changed
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for k3s node to report Ready
+      ansible.builtin.shell: >
+        /usr/local/bin/k3s kubectl get node -o
+        jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
+      register: node_ready
+      until: node_ready.stdout == "True"
+      retries: 20
+      delay: 5
+      changed_when: false # this task only ever checks status, never
+      # changes anything — telling Ansible that explicitly keeps your
+      # playbook run summary honest (no false "changed" count).
+
+    # -----------------------------------------------------------------
+    # Task 3: fetch the kubeconfig back to your Mac so you can run
+    # kubectl/argocd CLI commands locally instead of only from inside
+    # an SSH session. k3s writes a kubeconfig pointing at 127.0.0.1 by
+    # default, so we rewrite the server address to the node's real IP
+    # before pulling it — otherwise it would be useless off-box.
+    # -----------------------------------------------------------------
+    - name: Read the k3s-generated kubeconfig
+      ansible.builtin.slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: raw_kubeconfig
+
+    - name: Write a corrected kubeconfig back to the control machine
+      ansible.builtin.copy:
+        content: >-
+          {{
+            (raw_kubeconfig.content | b64decode)
+            | replace('127.0.0.1', ansible_host)
+            | replace('localhost', ansible_host)
+          }}
+        dest: "{{ kubeconfig_local_path }}"
+        mode: "0600"
+      delegate_to: localhost
+      become: false	
+      # `delegate_to: localhost` is the key idea here: every other task
+      # in this playbook runs ON the remote EC2 host, but this one task
+      # runs on YOUR Mac instead, writing the file to your local
+      # filesystem. Ansible tasks aren't all-or-nothing remote — you can
+      # mix where each step executes.
+
+    # -----------------------------------------------------------------
+    # Task 4: install ArgoCD into the cluster. Kubernetes namespaces are
+    # themselves idempotent via the k8s module (create if missing, no-op
+    # if present) — this is the same "declare desired state" idea as
+    # Terraform, just at the Kubernetes API level instead of AWS's.
+    # -----------------------------------------------------------------
+    - name: Ensure ArgoCD namespace exists
+      ansible.builtin.shell: >
+        /usr/local/bin/k3s kubectl get namespace {{ argocd_namespace }}
+        || /usr/local/bin/k3s kubectl create namespace {{ argocd_namespace }}
+      register: ns_result
+      changed_when: "'created' in ns_result.stdout"
+
+    - name: Apply the official ArgoCD install manifests
+      ansible.builtin.shell: >
+        /usr/local/bin/k3s kubectl apply -n {{ argocd_namespace }}
+        --server-side --force-conflicts
+        -f {{ argocd_manifest_url }}
+      register: argocd_apply
+      changed_when: "'unchanged' not in argocd_apply.stdout"
+
+    - name: Wait for the argocd-server Deployment to become available
+      ansible.builtin.shell: >
+        /usr/local/bin/k3s kubectl -n {{ argocd_namespace }}
+        rollout status deployment/argocd-server --timeout=180s
+      register: rollout
+      changed_when: false
+
+    - name: Retrieve the initial ArgoCD admin password
+      ansible.builtin.shell: >
+        /usr/local/bin/k3s kubectl -n {{ argocd_namespace }}
+        get secret argocd-initial-admin-secret
+        -o jsonpath='{.data.password}' | base64 -d
+      register: argocd_password
+      changed_when: false
+      no_log: true # don't print the password into Ansible's own logs/
+      # console output — a small but real security habit: secrets that
+      # a task *produces* shouldn't be echoed just because Ansible is
+      # verbose by default.
+
+    - name: Show how to log into ArgoCD
+      ansible.builtin.debug:
+        msg: >-
+          ArgoCD is up. Port-forward with:
+          kubectl --kubeconfig {{ kubeconfig_local_path }}
+          -n {{ argocd_namespace }} port-forward svc/argocd-server 8080:443
+          then browse to https://localhost:8080 (user: admin).
+          Run this playbook with -vvv if you need the password reprinted;
+          it's intentionally suppressed from normal output (no_log).
+  handlers:
+    - name: Restart k3s
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted

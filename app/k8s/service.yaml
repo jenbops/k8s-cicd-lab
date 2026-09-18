@@ -1,0 +1,34 @@
+# service.yaml
+#
+# WHAT THIS FILE DOES:
+# Exposes the hello-app pods on a stable address inside the cluster, and
+# via NodePort, on the EC2 host's own IP too, so you can curl it from
+# your Mac without port-forwarding.
+#
+# WHY THIS MATTERS FOR LEARNING:
+# Pods are ephemeral and get replaced with new IPs constantly (every
+# rolling update from the Deployment above hands out fresh pod IPs) — a
+# Service is what gives you a stable thing to talk to regardless of
+# which specific pods are currently backing it. `selector` below is how
+# it finds them: any pod with label app=hello-app is automatically a
+# backend, no manual wiring needed.
+#
+# NodePort here (30080, matching var.app_port in Terraform and the
+# security group rule that allows it from your IP) is the simplest of
+# Kubernetes' four Service types for a single-node lab. A real
+# multi-node production cluster would more likely use a LoadBalancer
+# Service (cloud provider provisions an actual load balancer, like the
+# ALB in the earlier EKS diagram) instead.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-app
+spec:
+  type: NodePort
+  selector:
+    app: hello-app
+  ports:
+    - port: 80
+      targetPort: 5000
+      nodePort: 30080

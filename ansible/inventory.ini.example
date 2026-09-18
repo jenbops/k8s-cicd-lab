@@ -1,0 +1,37 @@
+# inventory.ini.example
+#
+# WHAT THIS FILE DOES:
+# Tells Ansible which machine(s) to configure and how to reach them.
+# This is Ansible's most fundamental concept: it's "agentless" — there's
+# no Ansible daemon running on the target host. Every run just SSHes in,
+# copies over a small Python payload, runs it, and cleans up. The
+# inventory file is simply the address book.
+#
+# WHY THIS MATTERS FOR LEARNING:
+# Notice this is a *separate* file/tool from Terraform, even though both
+# are "infrastructure" tools. That split is deliberate and is a common
+# real-world pattern:
+#   - Terraform/OpenTofu = provisioning ("does this server exist, with
+#     this size, this network access, this disk?")
+#   - Ansible = configuration management ("given a server that already
+#     exists, get the right software installed and configured on it")
+# Terraform is bad at the second job (its provisioners are a last resort,
+# explicitly discouraged in HashiCorp's own docs) and Ansible is bad at
+# the first (it has no real concept of cloud resource lifecycle/state).
+# Using each for what it's good at is the standard pairing you'll see in
+# real job postings that mention both tools.
+#
+# Copy this to inventory.ini and fill in the real IP — or better, generate
+# it automatically (see the README "Run it" section) using:
+#   echo "[k3s_node]
+#   $(tofu output -raw public_ip) ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/jenops_key_pair.pem" > inventory.ini
+
+[k3s_node]
+REPLACE_WITH_PUBLIC_IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/jenops_key_pair.pem
+
+[k3s_node:vars]
+ansible_python_interpreter=/usr/bin/python3
+# Ubuntu AMIs prompt to accept SSH host keys on first connect; this is
+# fine for a personal test lab. In a real team environment you'd manage
+# known_hosts properly instead of disabling checking.
+ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'

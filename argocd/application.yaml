@@ -1,0 +1,57 @@
+# application.yaml
+#
+# WHAT THIS FILE DOES:
+# This is an ArgoCD "Application" — a Kubernetes Custom Resource (CRD)
+# that tells ArgoCD what to watch and what to do about it. You apply
+# this ONCE, manually, after ArgoCD itself is installed (see README
+# step 4). From that point on, ArgoCD manages everything in
+# spec.source.path for you.
+#
+# WHY THIS MATTERS FOR LEARNING:
+# This is the piece that closes the GitOps loop. Without this file,
+# ArgoCD is installed but idle — it has nothing to watch. Once applied,
+# ArgoCD will:
+#   - Clone spec.source.repoURL and read the manifests at spec.source.path
+#   - Compare them against what's actually running in the cluster
+#   - If `syncPolicy.automated` is set (it is, below), apply any diff
+#     automatically — no human runs `kubectl apply` or `argocd sync`
+#     for routine deploys once this is in place
+# This is also a good moment to notice: an ArgoCD Application is itself
+# just a YAML manifest, applied the normal kubectl way. GitOps tools are
+# often "Kubernetes controllers configured via Kubernetes objects" —
+# the same pattern repeats at every layer.
+#
+# REPLACE the repoURL below with your real fork's URL once you've pushed
+# this project to your own GitHub repo.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello-app
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/YOUR_GITHUB_USERNAME/k8s-cicd-lab.git
+    targetRevision: main
+    path: app/k8s # only this folder is watched — terraform/ and ansible/
+    # changes are irrelevant to ArgoCD and won't trigger anything
+
+  destination:
+    server: https://kubernetes.default.svc # "the cluster ArgoCD itself
+    # runs in" — this is an in-cluster deploy, not a remote one
+    namespace: default
+
+  syncPolicy:
+    automated:
+      prune: true    # if a manifest is deleted from git, delete the
+                      # matching resource from the cluster too — keeps
+                      # git as the true single source of desired state
+      selfHeal: true  # if someone kubectl-edits a live resource by hand
+                      # (drift), ArgoCD reverts it back to match git on
+                      # its next reconcile loop — this is what "GitOps"
+                      # promises: the cluster can't stay out of sync
+                      # with git for long, even accidentally
+    syncOptions:
+      - CreateNamespace=true

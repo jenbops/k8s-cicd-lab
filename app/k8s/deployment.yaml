@@ -1,0 +1,66 @@
+# deployment.yaml
+#
+# WHAT THIS FILE DOES:
+# Declares the desired state for running the app: 2 replicas of a pod
+# built from the image below, with resource limits sized for a
+# 2-vCPU/2GB-RAM single-node k3s cluster.
+#
+# WHY THIS MATTERS FOR LEARNING:
+# THIS is the file your CI pipeline edits on every build — specifically
+# the `image:` line's tag. ArgoCD is watching this exact file in your
+# git repo. The flow is:
+#   1. You push app code changes
+#   2. CI builds a new image tagged with the commit SHA, pushes it
+#   3. CI edits the `image:` tag below to match, commits that change
+#   4. ArgoCD notices the git diff and applies it to the live cluster
+#   5. Kubernetes does a rolling update: new pods come up, old ones
+#      terminate, with zero manual kubectl commands from you
+# Nobody ever runs `kubectl set image` by hand in this model — git is
+# the single source of truth for "what should be running," which is the
+# entire premise of GitOps.
+#
+# REPLACE ghcr.io/YOUR_GITHUB_USERNAME/... below with your real GHCR
+# path once you've forked/pushed this to your own repo (see README).
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-app
+  labels:
+    app: hello-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hello-app
+  template:
+    metadata:
+      labels:
+        app: hello-app
+    spec:
+      containers:
+        - name: hello-app
+          image: ghcr.io/YOUR_GITHUB_USERNAME/k8s-cicd-lab-app:latest
+          ports:
+            - containerPort: 5000
+          resources:
+            # Modest on purpose — two replicas of this plus ArgoCD's own
+            # pods (see LEARNING.md) all have to coexist on a 2GB node.
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 10

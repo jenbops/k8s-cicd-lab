@@ -1,0 +1,13 @@
+# terraform.tfvars.example
+#
+# Copy this file to terraform.tfvars (which is gitignored — see .gitignore)
+# and fill in your real values. terraform.tfvars is auto-loaded by
+# `tofu apply` with no extra flags, so this is the normal place to put
+# values you don't want to type on the command line every time — but
+# NEVER commit the real terraform.tfvars, since it can contain
+# environment-specific/sensitive values.
+
+key_pair_name = "jenops_key_pair"   # matches the .pem in ~/.ssh/
+my_ip_cidr    = "203.0.113.4/32"    # run: curl -s ifconfig.me
+aws_region    = "us-east-1"
+instance_type = "t3.small"

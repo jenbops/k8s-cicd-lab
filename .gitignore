@@ -1,0 +1,15 @@
+# Terraform/OpenTofu state and secrets — never commit these
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/terraform.tfvars
+terraform/.terraform.lock.hcl
+
+# Ansible-generated / secret files
+ansible/inventory.ini
+kubeconfig.yaml
+
+# Python
+__pycache__/
+*.pyc
+venv/

@@ -1,0 +1,110 @@
+# .github/workflows/ci.yml
+#
+# WHAT THIS FILE DOES:
+# GitHub Actions workflow — this IS the "CI" half of "CI/CD" in this
+# project. Triggered on every push to main that touches app/**. It:
+#   1. Builds the Docker image from app/Dockerfile
+#   2. Tags it with the short git SHA (not "latest" — see note below)
+#   3. Pushes it to GHCR (GitHub Container Registry — free, no extra
+#      account needed beyond GitHub itself)
+#   4. Edits app/k8s/deployment.yaml's image tag to match
+#   5. Commits and pushes that change back to the repo
+#
+# WHY THIS MATTERS FOR LEARNING:
+# Notice what this workflow does NOT do: it never touches the cluster,
+# never runs kubectl, never knows the EC2 instance exists. That's the
+# whole point of splitting CI from CD:
+#   - CI (this file) answers "is the code good, and what image did we
+#     produce from it?" — runs in GitHub's infrastructure, has zero
+#     credentials for your cluster, and can't accidentally deploy
+#     something broken to production by itself.
+#   - CD (ArgoCD, running inside your cluster) answers "does the
+#     cluster match what git says it should?" — it PULLS changes on its
+#     own schedule/webhook, rather than CI PUSHING a deploy command to
+#     it. Your cluster never had to expose an inbound endpoint for
+#     GitHub Actions to reach — a real security advantage of the
+#     pull-based GitOps model over traditional push-based CD.
+#
+# WHY THE COMMIT SHA AS THE TAG, NOT "latest":
+# Tagging every build "latest" makes rollbacks and audits impossible —
+# you can't tell which code is actually running, and re-pulling
+# "latest" later gives you a different image than what's live now.
+# Tagging with the immutable git SHA means the deployment.yaml diff
+# ArgoCD sees is always meaningful, and `git log app/k8s/deployment.yaml`
+# becomes a real deploy history.
+
+name: Build, Push, and Update Manifest
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/ci.yml"
+
+# Least-privilege permissions: this workflow only needs to write
+# packages (push the image) and write repo contents (commit the
+# manifest update) — nothing else.
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/k8s-cicd-lab-app
+
+jobs:
+  build-and-update-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need full history so the manifest-update commit
+          # below has a real base to push against, not a shallow clone
+
+      - name: Compute short SHA as the image tag
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          # GITHUB_TOKEN is auto-issued per workflow run by GitHub itself
+          # — you never generate or store this secret yourself.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./app
+          push: true
+          build-args: |
+            APP_VERSION=${{ steps.vars.outputs.sha_short }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.sha_short }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update image tag in the k8s manifest
+        run: |
+          sed -i \
+            "s|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:.*|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.sha_short }}|" \
+            app/k8s/deployment.yaml
+
+      - name: Commit and push the manifest update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add app/k8s/deployment.yaml
+          # Guard against an empty commit if, e.g., you re-ran the
+          # workflow on the same SHA (nothing would actually change).
+          git diff --cached --quiet && echo "No manifest change, skipping commit" && exit 0
+          git commit -m "ci: deploy ${{ steps.vars.outputs.sha_short }}"
+          git push
