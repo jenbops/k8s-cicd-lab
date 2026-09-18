@@ -33,7 +33,7 @@ spec:
   project: default
 
   source:
-    repoURL: https://github.com/YOUR_GITHUB_USERNAME/k8s-cicd-lab.git
+    repoURL: https://github.com/jenbops/k8s-cicd-lab.git
     targetRevision: main
     path: app/k8s # only this folder is watched — terraform/ and ansible/
     # changes are irrelevant to ArgoCD and won't trigger anything

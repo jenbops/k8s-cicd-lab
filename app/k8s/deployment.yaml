@@ -19,7 +19,7 @@
 # the single source of truth for "what should be running," which is the
 # entire premise of GitOps.
 #
-# REPLACE ghcr.io/YOUR_GITHUB_USERNAME/... below with your real GHCR
+# REPLACE ghcr.io/jenbops/... below with your real GHCR
 # path once you've forked/pushed this to your own repo (see README).
 
 apiVersion: apps/v1
@@ -40,7 +40,7 @@ spec:
     spec:
       containers:
         - name: hello-app
-          image: ghcr.io/YOUR_GITHUB_USERNAME/k8s-cicd-lab-app:latest
+          image: ghcr.io/jenbops/k8s-cicd-lab-app:latest
           ports:
             - containerPort: 5000
           resources:
